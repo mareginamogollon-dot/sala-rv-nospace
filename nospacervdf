@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>Sala VR — Persona Luz</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+  <!-- Añadimos tiny helper para easing -->
+  <script>
+    // easing simple
+    function lerp(a,b,t){ return a + (b-a)*t; }
+  </script>
+  <style>
+    body { margin: 0; background: black; }
+    .info {
+      position: absolute; z-index: 999; color: white; left: 12px; top: 12px;
+      font-family: sans-serif; font-size: 13px; opacity: 0.9;
+      background: rgba(0,0,0,0.25); padding:8px; border-radius:6px;
+    }
+  </style>
+</head>
+<body>
+  <div class="info">Sala VR — la "persona luz" eres tú. Mira alrededor. (Si usas lentes VR, pega la URL en el navegador del visor)</div>
+
+  <a-scene vr-mode-ui="enabled: true" renderer="antialias: true; colorManagement: true" embedded>
+    <!-- rig (moveremos esto para simular la caída) -->
+    <a-entity id="rig" position="0 1.6 0">
+      <!-- cámara: en VR será la posición del usuario -->
+      <a-entity id="camera" camera look-controls wasd-controls="enabled: false"></a-entity>
+
+      <!-- persona-luz: visible para el mundo (y para clones que simulan reflejos) -->
+      <!-- la persona es una combinación de cilindro (cuerpo) y esfera (cabeza) con material emisive -->
+      <a-entity id="persona" position="0 -0.9 -0.5">
+        <a-sphere id="head" position="0 1.45 0" radius="0.18"
+                  material="color: #fff; emissive: #fff; emissiveIntensity: 1.5; metalness: 0.2; roughness: 0">
+        </a-sphere>
+
+        <a-cylinder id="body" position="0 0.6 0" radius="0.25" height="1"
+                    material="color:#fff; emissive:#fff; emissiveIntensity:1.2; metalness:0.1; roughness:0">
+        </a-cylinder>
+
+        <!-- halo/glow rings -->
+        <a-ring position="0 0.8 0" rotation="-90 0 0" radius-inner="0.6" radius-outer="1.2"
+                material="color:#fff; shader:flat; opacity:0.03"></a-ring>
+        <a-ring position="0 0.9 0" rotation="-90 0 0" radius-inner="0.4" radius-outer="0.9"
+                material="color:#fff; shader:flat; opacity:0.05"></a-ring>
+      </a-entity>
+    </a-entity>
+
+    <!-- Piso sutil para referencia -->
+    <a-plane rotation="-90 0 0" width="40" height="40" position="0 0 0"
+             material="color: #050505; metalness: 0.1; roughness: 0.9; opacity: 1"></a-plane>
+
+    <!-- Paredes espejo (visual) -->
+    <!-- We'll keep actual reflection simulation with mirrored clones in JS -->
+    <a-entity id="walls">
+      <a-plane id="wall-front" class="mirror" position="0 2 -6" rotation="0 0 0" width="12" height="6"
+               material="color:#eee; metalness:1; roughness:0.05; opacity:0.12"></a-plane>
+      <a-plane id="wall-back" class="mirror" position="0 2 6" rotation="0 180 0" width="12" height="6"
+               material="color:#eee; metalness:1; roughness:0.05; opacity:0.12"></a-plane>
+      <a-plane id="wall-left" class="mirror" position="-6 2 0" rotation="0 90 0" width="12" height="6"
+               material="color:#eee; metalness:1; roughness:0.05; opacity:0.12"></a-plane>
+      <a-plane id="wall-right" class="mirror" position="6 2 0" rotation="0 -90 0" width="12" height="6"
+               material="color:#eee; metalness:1; roughness:0.05; opacity:0.12"></a-plane>
+    </a-entity>
+
+    <!-- Hilos rojos (sujetos al techo) -->
+    <a-entity id="hilos">
+      <!-- creamos varios hilos; se animan por JS/CSS -->
+      <a-cylinder class="hilo" position="-2 4 -2" radius="0.02" height="3" material="color: red"></a-cylinder>
+      <a-cylinder class="hilo" position=" 0 4 -1" radius="0.02" height="3" material="color: red"></a-cylinder>
+      <a-cylinder class="hilo" position=" 2 4  0" radius="0.02" height="3" material="color: red"></a-cylinder>
+      <a-cylinder class="hilo" position="-1 4  2" radius="0.02" height="3" material="color: red"></a-cylinder>
+      <a-cylinder class="hilo" position=" 1 4  2" radius="0.02" height="3" material="color: red"></a-cylinder>
+    </a-entity>
+
+    <!-- Partículas: contenedor -->
+    <a-entity id="particles"></a-entity>
+
+    <!-- Light ambiente y puntual para realce de glow -->
+    <a-ambient-light color="#666"></a-ambient-light>
+    <a-point-light id="personaLight" intensity="1.8" distance="6" color="#ffffff" position="0 2 0"></a-point-light>
+
+    <!-- cursor para modo no-VR (opcional) -->
+    <a-entity camera position="0 1.6 0" look-controls-enabled="true" visible="false"></a-entity>
+  </a-scene>
+
+  <script>
+    // ====== Configuración inicial ======
+    const scene = document.querySelector('a-scene');
+    const rig = document.getElementById('rig');
+    const camera = document.getElementById('camera');
+    const persona = document.getElementById('persona');
+    const personaLight = document.getElementById('personaLight');
+    const hilos = Array.from(document.querySelectorAll('.hilo'));
+    const particlesContainer = document.getElementById('particles');
+
+    // Crear partículas (pequeños seres de colores)
+    const PARTICLE_COUNT = 160;
+    const COLORS = ['#00ffff','#00ff66','#ff2b2b','#ffffff']; // azul, verde, rojo, blanco
+    for (let i=0;i<PARTICLE_COUNT;i++){
+      const p = document.createElement('a-sphere');
+      const size = (Math.random()*0.06)+0.02;
+      p.setAttribute('radius', size);
+      p.setAttribute('material', `color: ${COLORS[Math.floor(Math.random()*COLORS.length)]}; emissive: ${COLORS[Math.floor(Math.random()*COLORS.length)]}; emissiveIntensity:0.9; shader:standard`);
+      // random position in a big volume
+      const x = (Math.random()-0.5)*12;
+      const y = Math.random()*6;
+      const z = (Math.random()-0.5)*12;
+      p.setAttribute('position', `${x} ${y} ${z}`);
+      // animate upwards slowly and fade
+      const dur = (Math.random()*8000)+6000;
+      p.setAttribute('animation', `property: position; to: ${x} ${y+8} ${z}; dur: ${dur}; loop: true; easing: linear`);
+      particlesContainer.appendChild(p);
+    }
+
+    // ====== Vibración de hilos ======
+    // hacemos vibrar cada hilo con small rotation/offset
+    const hiloParams = [];
+    hilos.forEach((h, idx) => {
+      const amp = 10 + Math.random()*12; // grados
+      const speed = 60 + Math.random()*60; // ms per small cycle
+      hiloParams.push({el:h, amp, speed, t: Math.random()*1000});
+    });
+
+    let running = true;
+    function animateHilos(dt){
+      if (!running) return;
+      hiloParams.forEach(p=>{
+        p.t += dt;
+        const angle = Math.sin(p.t / p.speed) * p.amp;
+        p.el.setAttribute('rotation', `${angle} 0 0`);
+      });
+    }
+
+    // loop anim hilos
+    let last = performance.now();
+    function raf(now){
+      const dt = now - last;
+      last = now;
+      animateHilos(dt);
+      requestAnimationFrame(raf);
+    }
+    requestAnimationFrame(raf);
+
+    // ====== Reflejos simulados: clones reflejados de la persona en cada pared ======
+    // Paredas definidas como planes: front (z=-6), back (z=6), left (x=-6), right (x=6)
+    const mirrors = [
+      {id:'wall-front', normal:[0,0,1], position:[0,0,-6]},
+      {id:'wall-back',  normal:[0,0,-1], position:[0,0,6]},
+      {id:'wall-left',  normal:[1,0,0], position:[-6,0,0]},
+      {id:'wall-right', normal:[-1,0,0], position:[6,0,0]}
+    ];
+
+    // Crear clones (representan el reflejo de la persona)
+    const clones = [];
+    mirrors.forEach(m=>{
+      const clone = document.createElement('a-entity');
+      // cuerpo simple (head+body) que copia "persona" visual style
+      const head = document.createElement('a-sphere');
+      head.setAttribute('radius','0.18');
+      head.setAttribute('material', 'color:#fff; emissive:#fff; emissiveIntensity:1; shader:standard');
+      head.setAttribute('position','0 1.45 0');
+      const body = document.createElement('a-cylinder');
+      body.setAttribute('radius','0.25');
+      body.setAttribute('height','1');
+      body.setAttribute('material','color:#fff; emissive:#fff; emissiveIntensity:0.9; shader:standard');
+      body.setAttribute('position','0 0.6 0');
+      clone.appendChild(head);
+      clone.appendChild(body);
+      clone.setAttribute('scale','1 1  -1'); // flip on z to mimic mirror axis; we'll adjust transform later
+      clone.setAttribute('visible','true');
+      scene.appendChild(clone);
+      clones.push({ent:clone, mirror:m});
+    });
+
+    // función para reflejar la posición del rig respecto a un plano (mirror plane)
+    function reflectPositionAcrossPlane(pos, planePoint, planeNormal){
+      // reflect vector: p' = p - 2 * ((p - a) · n) * n
+      const px = pos.x, py = pos.y, pz = pos.z;
+      const ax = planePoint[0], ay = planePoint[1], az = planePoint[2];
+      const nx = planeNormal[0], ny = planeNormal[1], nz = planeNormal[2];
+      const dot = ( (px-ax)*nx + (py-ay)*ny + (pz-az)*nz );
+      return {
+        x: px - 2*dot*nx,
+        y: py - 2*dot*ny,
+        z: pz - 2*dot*nz
+      };
+    }
+
+    // actualizar clones cada frame para "reflejar" la persona
+    function updateClones(){
+      const rigPos = rig.object3D.position;
+      clones.forEach(c=>{
+        const plane = c.mirror;
+        const ref = reflectPositionAcrossPlane(rigPos, plane.position, plane.normal);
+        // place the clone slightly inside the mirror plane so it appears on the surface
+        const offset = 0.01;
+        const px = ref.x + plane.normal[0]*offset;
+        const py = ref.y + plane.normal[1]*offset;
+        const pz = ref.z + plane.normal[2]*offset;
+        c.ent.setAttribute('position', `${px} ${py-1.6} ${pz}`); // adjust so matches persona model
+        // rotate the clone to face inward (approx)
+        if (plane.id.includes('front') || plane.id.includes('back')){
+          c.ent.setAttribute('rotation', `0 180 0`);
+        } else if (plane.id.includes('left')){
+          c.ent.setAttribute('rotation', `0 90 0`);
+        } else {
+          c.ent.setAttribute('rotation', `0 -90 0`);
+        }
+        // scale on one axis handled earlier to give mirror flip impression
+      });
+    }
+
+    // call updateClones periodically
+    setInterval(updateClones, 40);
+
+    // also set personaLight to follow rig/camera
+    function updateLight(){
+      const p = rig.object3D.position;
+      const cameraObj = camera.object3D;
+      const worldPos = new THREE.Vector3();
+      cameraObj.getWorldPosition(worldPos);
+      personaLight.setAttribute('position', `${worldPos.x} ${worldPos.y} ${worldPos.z}`);
+    }
+    setInterval(updateLight, 50);
+
+    // ====== Secuencia temporal: 10s vibración → detener → 12s caída en seco ======
+    // 10000 ms vibración activa (ya se está animando)
+    setTimeout(()=> {
+      // detener la vibración (suavemente)
+      running = false;
+      // poner rotación a 0 con transición suave (fade)
+      hiloParams.forEach((p, i)=>{
+        const el = p.el;
+        el.removeAttribute('animation'); // stop any a-frame animation
+        // animate rotation to 0 over 1s using JS
+        const startRot = el.getAttribute('rotation');
+        const startAngle = startRot.x || 0;
+        const duration = 1000;
+        const startTime = performance.now();
+        function smoothToZero(now){
+          const t = Math.min(1, (now - startTime)/duration);
+          const angle = lerp(startAngle, 0, t);
+          el.setAttribute('rotation', `${angle} 0 0`);
+          if (t < 1) requestAnimationFrame(smoothToZero);
+        }
+        requestAnimationFrame(smoothToZero);
+      });
+
+      // fade out hilos empezando en 11.6s (we scheduled disappear at 12s in original idea)
+      hilos.forEach((h, idx)=>{
+        // fade opacity by animating material property
+        h.setAttribute('animation__fade', `property: material.opacity; to: 0; dur: 1400; delay: 1400; easing: easeInOutQuad`);
+      });
+
+    }, 10000); // 10s
+
+    // Caída programada a 12s (12000ms)
+    setTimeout(()=> {
+      // CAÍDA EN SECO: movemos el rig hacia abajo de forma rápida
+      // we'll move rig y from current to current - 2 (2 meters down) in 0.45s
+      const duration = 450; // ms
+      const start = performance.now();
+      const startY = rig.object3D.position.y;
+      const targetY = startY - 2.2; // caída "en seco"
+      function fallFrame(now){
+        const t = Math.min(1, (now - start)/duration);
+        // use ease-in cubic for sudden
+        const eased = Math.pow(t, 3);
+        const y = lerp(startY, targetY, eased);
+        rig.setAttribute('position', `0 ${y} 0`);
+        if (t < 1) requestAnimationFrame(fallFrame);
+      }
+      requestAnimationFrame(fallFrame);
+
+      // opcional: después de caer, un pequeño rebote y luego estabilizar
+      setTimeout(()=>{
+        // rebote pequeño
+        const dur2 = 380;
+        const s = performance.now();
+        const rebounceStartY = rig.object3D.position.y;
+        const rebounceTargetY = rebounceStartY + 0.35;
+        function bounce(now){
+          const tt = Math.min(1,(now-s)/dur2);
+          const e = Math.sin(tt*Math.PI); // single bump
+          const y = lerp(rebounceStartY, rebounceTargetY, e);
+          rig.setAttribute('position', `0 ${y} 0`);
+          if (tt < 1) requestAnimationFrame(bounce);
+        }
+        requestAnimationFrame(bounce);
+      }, 500);
+
+      // increase ambient pulse or flash to enhance feeling
+      flashScene();
+
+    }, 12000); // 12s
+
+    // small flash effect when falling to enhance sensation
+    function flashScene(){
+      // create a white plane in front of camera and fade quickly
+      const flash = document.createElement('a-plane');
+      flash.setAttribute('position','0 0 -0.5');
+      flash.setAttribute('rotation','0 0 0');
+      flash.setAttribute('width','3');
+      flash.setAttribute('height','2');
+      flash.setAttribute('material','color:#fff; shader:flat; opacity:0.0');
+      camera.appendChild(flash);
+      // animate opacity up and down
+      flash.setAttribute('animation__in','property: material.opacity; to: 0.7; dur: 90; easing: easeOutQuad');
+      setTimeout(()=> {
+        flash.setAttribute('animation__out','property: material.opacity; to: 0; dur: 350; delay: 50; easing: easeInQuad');
+        setTimeout(()=> { flash.parentNode && flash.parentNode.removeChild(flash); }, 500);
+      }, 80);
+    }
+
+    // small gentle loop to update clones and light every frame for smoothness
+    scene.addEventListener('loaded', ()=>{
+      scene.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+      function tick(){
+        updateClones();
+        updateLight();
+        requestAnimationFrame(tick);
+      }
+      requestAnimationFrame(tick);
+    });
+
+    // Accessibility: allow user to trigger reset by pressing R (desktop)
+    window.addEventListener('keydown', (e)=>{
+      if (e.key === 'r' || e.key === 'R'){
+        rig.setAttribute('position','0 1.6 0');
+        // reset hilos opacity
+        hilos.forEach(h=> h.setAttribute('material','opacity:1'));
+        running = true;
+        last = performance.now();
+        requestAnimationFrame(raf);
+      }
+    });
+
+    // Small note: On some VR browsers movement of camera rig may be restricted;
+    // If rig movement is blocked in VR, the visual "fall" may be more subtle.
+    // This implementation works on standard A-Frame browsers (mobile, desktop)
+    // and on Oculus Browser (movement of rig will move the viewpoint if allowed).
+  </script>
+</body>
+</html>
