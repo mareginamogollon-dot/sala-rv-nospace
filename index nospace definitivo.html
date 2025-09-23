@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>NoSpace VR</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+<style>body{margin:0;background:#000;}</style>
+</head>
+<body>
+<a-scene embedded vr-mode-ui="enabled: true">
+  <!-- Rig (usuario/cámara) -->
+  <a-entity id="rig" position="0 1.6 0">
+    <a-entity id="camera" camera look-controls wasd-controls="enabled: false">
+      <!-- Aura de luz / persona -->
+      <a-sphere position="0 0 0" radius="0.4" color="#fff" opacity="0.8" material="shader: standard; emissive: #fff; emissiveIntensity: 2"></a-sphere>
+    </a-entity>
+  </a-entity>
+
+  <!-- Paredes brillantes -->
+  <a-box position="0 3 -6" depth="0.1" height="6" width="12" material="color:#eee; metalness:0.9; roughness:0.1; opacity:0.2"></a-box>
+  <a-box position="0 3 6" depth="0.1" height="6" width="12" material="color:#eee; metalness:0.9; roughness:0.1; opacity:0.2"></a-box>
+  <a-box position="-6 3 0" rotation="0 90 0" depth="0.1" height="6" width="12" material="color:#eee; metalness:0.9; roughness:0.1; opacity:0.2"></a-box>
+  <a-box position="6 3 0" rotation="0 90 0" depth="0.1" height="6" width="12" material="color:#eee; metalness:0.9; roughness:0.1; opacity:0.2"></a-box>
+
+  <!-- Hilos rojos vibrando -->
+  <a-entity id="hilos">
+    <a-cylinder class="hilo" position="-2 4 -2" radius="0.02" height="3" color="red"></a-cylinder>
+    <a-cylinder class="hilo" position="0 4 -1" radius="0.02" height="3" color="red"></a-cylinder>
+    <a-cylinder class="hilo" position="2 4 0" radius="0.02" height="3" color="red"></a-cylinder>
+    <a-cylinder class="hilo" position="-1 4 2" radius="0.02" height="3" color="red"></a-cylinder>
+    <a-cylinder class="hilo" position="1 4 2" radius="0.02" height="3" color="red"></a-cylinder>
+  </a-entity>
+
+  <!-- Partículas coloridas -->
+  <a-entity id="particles"></a-entity>
+
+  <!-- Luz ambiente -->
+  <a-ambient-light color="#666"></a-ambient-light>
+  <a-point-light id="personaLight" intensity="2" distance="6" color="#ffffff" position="0 2 0"></a-point-light>
+</a-scene>
+
+<script>
+const rig = document.getElementById('rig');
+const hilos = Array.from(document.querySelectorAll('.hilo'));
+const particlesContainer = document.getElementById('particles');
+
+// Generar partículas flotantes
+const PARTICLE_COUNT = 200;
+const COLORS = ['#00ffff','#00ff66','#ff2b2b','#ffffff'];
+for (let i=0;i<PARTICLE_COUNT;i++){
+  const p = document.createElement('a-sphere');
+  const size = (Math.random()*0.06)+0.02;
+  const color1 = COLORS[Math.floor(Math.random()*COLORS.length)];
+  const color2 = COLORS[Math.floor(Math.random()*COLORS.length)];
+  p.setAttribute('radius', size);
+  p.setAttribute('material', `color: ${color1}; emissive: ${color2}; emissiveIntensity:0.9`);
+  const x = (Math.random()-0.5)*12;
+  const y = Math.random()*6;
+  const z = (Math.random()-0.5)*12;
+  p.setAttribute('position', `${x} ${y} ${z}`);
+  p.setAttribute('animation', `property: position; to: ${x} ${y+8} ${z}; dur: ${(Math.random()*8000)+6000}; loop: true; easing: linear`);
+  particlesContainer.appendChild(p);
+}
+
+// Hilos vibran y desaparecen después de 10s
+hilos.forEach((h)=>{
+  let angle = 0;
+  const amp = 10 + Math.random()*10;
+  const speed = 60 + Math.random()*60;
+  const vib = setInterval(()=>{
+    angle += speed/100;
+    h.setAttribute('rotation', `${Math.sin(angle)*amp} 0 0`);
+  },16);
+
+  setTimeout(()=>{
+    clearInterval(vib);
+    h.setAttribute('animation', 'property: material.opacity; to: 0; dur: 1500; easing: easeInOutQuad');
+  },10000);
+});
+
+// Caída de la luz-persona 12s después
+setTimeout(()=>{
+  const startY = rig.object3D.position.y;
+  const endY = startY - 2.5;
+  const duration = 500;
+  const startTime = performance.now();
+  function fall(now){
+    const t = Math.min(1,(now-startTime)/duration);
+    const eased = Math.pow(t,3);
+    rig.setAttribute('position', `0 ${startY+(endY-startY)*eased} 0`);
+    if(t<1) requestAnimationFrame(fall);
+  }
+  requestAnimationFrame(fall);
+},12000);
+</script>
+</body>
+</html>
